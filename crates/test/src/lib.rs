@@ -1247,6 +1247,10 @@ trait LanguageMethods {
             Some(false) => {}
         }
 
+        for arg in self.additional_bindgen_args(&bindgen.wit_path)? {
+            cmd.arg(arg);
+        }
+
         for arg in bindgen.args.iter() {
             cmd.arg(arg);
         }
@@ -1266,6 +1270,12 @@ trait LanguageMethods {
     /// tests, such as generating stub impls by default.
     fn default_bindgen_args_for_codegen(&self) -> &[&str] {
         &[]
+    }
+
+    /// Returns language-specific arguments configured beside a WIT codegen
+    /// fixture.
+    fn additional_bindgen_args(&self, _wit_path: &Path) -> Result<Vec<String>> {
+        Ok(Vec::new())
     }
 
     /// Returns the name of this bindings generator when passed to

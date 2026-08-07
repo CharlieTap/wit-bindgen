@@ -217,6 +217,13 @@ fn attach_with_context(err: Error) -> Error {
             "missing either `--generate-all` or `--with {option}=(...|generate)`"
         ));
     }
+    #[cfg(feature = "kotlin")]
+    if let Some(e) = err.downcast_ref::<wit_bindgen_kotlin::MissingWith>() {
+        let option = e.0.clone();
+        return err.context(format!(
+            "missing either `--generate-all` or `--with {option}=(...|generate)`"
+        ));
+    }
     err
 }
 

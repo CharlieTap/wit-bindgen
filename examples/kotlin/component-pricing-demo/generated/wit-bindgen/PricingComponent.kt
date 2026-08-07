@@ -13,41 +13,9 @@ import bindings.runtime.*
   // START OF TYPES
 
 
-  enum class CustomerTier {
-    STANDARD,
-    PREFERRED,
-    ENTERPRISE,
-  }
-
-  enum class TaxRegion {
-    EXEMPT,
-    UK,
-    EU,
-    US,
-  }
-
-  class QuoteRequest(
-    var sku: kotlin.String,
-    var quantity: kotlin.Int,
-    var unitPriceMinor: kotlin.Long,
-    var customerTier: bindings.Pricing.CustomerTier,
-    var taxRegion: bindings.Pricing.TaxRegion,
-    var currency: kotlin.String,
-  )
-
-  class PriceQuote(
-    var sku: kotlin.String,
-    var subtotalMinor: kotlin.Long,
-    var discountMinor: kotlin.Long,
-    var taxMinor: kotlin.Long,
-    var totalMinor: kotlin.Long,
-    var currency: kotlin.String,
-    var summary: kotlin.String,
-  )
-
   // END OF TYPES
 
-  fun quote(request: bindings.Pricing.QuoteRequest): bindings.Pricing.PriceQuote
+  fun quote(request: pricing.QuoteRequest): pricing.Quote
 
 }
 

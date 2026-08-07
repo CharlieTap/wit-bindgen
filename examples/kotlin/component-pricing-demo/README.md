@@ -5,15 +5,16 @@ WebAssembly component with Kotlin 2.4. The Kotlin interface, records, enums, and
 implementation remain the application-owned source of truth. The WIT contract
 is handwritten to keep the example focused on generated component bindings.
 
-The build uses the `wit-bindgen` checkout containing this example. The WIT
-interface defines the component's data types, so the generated bindings contain
-types equivalent to the application-owned declarations in the `pricing`
-package. `PricingImpl` translates between the two representations.
+The build uses the `wit-bindgen` checkout containing this example. The WIT world
+imports its data types and the Kotlin backend's `--with` option maps that
+interface onto the existing application-owned `pricing` package. The generated
+pricing export therefore uses `QuoteRequest` and an explicit `price-quote` to
+`Quote` type remapping rather than generating duplicate domain types.
 
 The relevant layers are:
 
 - `src/commonMain`: the Kotlin-owned interface, domain types, and implementation.
-- `src/wasmWasiMain`: the adapter between the generated export and the service.
+- `src/wasmWasiMain`: the implementation of the generated pricing export.
 - `generated/wit-bindgen`: checked-in Kotlin backend output from the local generator.
 
 Install the host tools with Homebrew:
@@ -32,7 +33,7 @@ make invoke
 ## Files to inspect
 
 - `wit/pricing.wit`: the handwritten pricing contract.
-- `generated/wit-bindgen/PricingComponent.kt`: the generated export interface and domain types.
-- `src/wasmWasiMain/kotlin/bindings/PricingImpl.kt`: the explicit conversion layer that delegates to the service.
+- `generated/wit-bindgen/PricingComponent.kt`: the generated export interface using application types.
+- `src/wasmWasiMain/kotlin/bindings/PricingImpl.kt`: the implementation that delegates to the service.
 - `build/pricing-service.wit`: WIT extracted from the completed pricing component.
 - `build/pricing-service.component.wasm`: the validated pricing component.

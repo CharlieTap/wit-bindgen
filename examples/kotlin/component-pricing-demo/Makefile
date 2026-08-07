@@ -27,6 +27,8 @@ generate: bindgen
 	mkdir -p $(GENERATED)
 	$(WIT_BINDGEN) kotlin \
 		--kotlin-package-name bindings \
+		--with 'example:pricing/pricing-types@1.0.0=pricing' \
+		--with 'example:pricing/pricing-types@1.0.0/price-quote=pricing.Quote' \
 		--out-dir $(GENERATED) \
 		wit
 

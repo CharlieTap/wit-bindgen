@@ -1,0 +1,61 @@
+//@ default-bindgen-args = false
+
+package test:kotlin-with;
+
+interface mapped {
+  record point {
+    x: u32,
+    y: u32,
+  }
+
+  enum status {
+    ready,
+    pending,
+  }
+
+  resource token;
+
+  variant value {
+    point(point),
+    status(status),
+    token(token),
+  }
+
+  record generated {
+    value: u32,
+  }
+
+  roundtrip: func(
+    point: point,
+    status: status,
+    value: value,
+    points: list<point>,
+    optional: option<point>,
+  ) -> result<point, string>;
+  exchange: func(value: token) -> token;
+  use-generated: func(value: generated) -> generated;
+}
+
+interface shared {
+  record payload {
+    value: u32,
+  }
+}
+
+interface importer {
+  use shared.{payload};
+  receive: func(value: payload) -> payload;
+}
+
+interface exporter {
+  use shared.{payload};
+  send: func(value: payload) -> payload;
+}
+
+world runner {
+  import mapped;
+  import shared;
+  export shared;
+  import importer;
+  export exporter;
+}

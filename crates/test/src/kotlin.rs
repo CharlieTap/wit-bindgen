@@ -1,6 +1,6 @@
 use crate::{LanguageMethods, Runner, Verify};
-use anyhow::{bail, Result};
-use std::path::PathBuf;
+use anyhow::{Context, Result, bail};
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use std::sync::{Mutex, OnceLock};
 use std::{env, fs};
@@ -169,6 +169,11 @@ fn download_and_extract_kotlinc_wasm(path_to_tmpdir: PathBuf) -> Result<KotlincW
 
 pub struct Kotlin;
 
+fn codegen_source(wit_path: &Path) -> PathBuf {
+    let stem = wit_path.file_stem().unwrap().to_str().unwrap();
+    wit_path.with_file_name(format!("{stem}.kotlin.kt"))
+}
+
 impl LanguageMethods for Kotlin {
     fn display(&self) -> &str {
         "kotlin"
@@ -185,14 +190,31 @@ impl LanguageMethods for Kotlin {
         Ok(())
     }
 
+    fn default_bindgen_args(&self) -> &[&str] {
+        &["--generate-all"]
+    }
+
     fn default_bindgen_args_for_codegen(&self) -> &[&str] {
         &["--generate-stubs"]
     }
 
+    fn additional_bindgen_args(&self, wit_path: &Path) -> Result<Vec<String>> {
+        let source_path = codegen_source(wit_path);
+        if !source_path.is_file() {
+            return Ok(Vec::new());
+        }
+        let source = fs::read_to_string(&source_path)
+            .with_context(|| format!("failed to read {source_path:?}"))?;
+        let config =
+            crate::config::parse_test_config::<crate::config::RuntimeTestConfig>(&source, "//@")?;
+        Ok(config.args.into())
+    }
+
     fn codegen_test_variants(&self) -> &[(&str, &[&str])] {
-        &[
-            ("visibility-internal", &["--declaration-visibility=internal"])
-        ]
+        &[(
+            "visibility-internal",
+            &["--declaration-visibility=internal"],
+        )]
     }
 
     fn compile(&self, _runner: &Runner, _compile: &crate::Compile) -> Result<()> {
@@ -292,14 +314,20 @@ impl LanguageMethods for Kotlin {
                 .to_path_buf(),
         );
 
+        let source_path = codegen_source(verify.wit_test);
+        if source_path.is_file() {
+            files.push(
+                source_path
+                    .canonicalize()
+                    .with_context(|| format!("failed to resolve {source_path:?}"))?,
+            );
+        }
+
         let filename = verify.wit_test.file_name().unwrap().to_str().unwrap();
         let args = verify.args;
 
         let unique_test_str = format!("{}_{}", filename, args.join("_"));
 
-        kotlinc_wasm.compile(
-            &*unique_test_str,
-            &*files,
-        )
+        kotlinc_wasm.compile(&*unique_test_str, &*files)
     }
 }
