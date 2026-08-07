@@ -2982,38 +2982,42 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                 let op = &operands[0];
                 let size_wasm32 = self.r#gen.r#gen.sizes.size(element).format("4"); // assuming 4 as the pointer size
                 let align_wasm32 = self.r#gen.r#gen.sizes.align(element).align_wasm32();
+                let values = self.locals.tmp("values");
                 let address = self.locals.tmp("address");
-                let iter = self.locals.tmp("iter");
-                let index = self.locals.tmp("index");
+                let length = self.locals.tmp("length");
+                let cursor = self.locals.tmp("cursor");
 
                 // TODO think about wasm32 vs 64
 
                 uwrite!(
                     self.src,
                     "
-                    val {address} = allocator.allocate({op}.size * {size_wasm32} /*, align_wasm32={align_wasm32}*/).address.toInt()
-                    for ({iter} in {op}.withIndex()) {{
-                        val {index} = {iter}.index
-                        val el = {iter}.value
-                        val base = {address} + ({index} * {size_wasm32})
+                    val {values} = {op}
+                    val {length} = {values}.size
+                    val {address} = allocator.allocate({length} * {size_wasm32} /*, align_wasm32={align_wasm32}*/).address.toInt()
+                    var {cursor} = {address}
+                    for (el in {values}) {{
+                        val base = {cursor}
                         {body}
+                        {cursor} += {size_wasm32}
                     }}
                     "
                 );
 
                 results.push(address);
-                results.push(format!("{op}.size"));
+                results.push(length);
             }
 
             Instruction::ListLift { element, .. } => {
                 let (body, block_results) = self.blocks.pop().unwrap();
                 let address = &operands[0];
-                let length = &operands[1];
+                let length_operand = &operands[1];
                 let list = self.locals.tmp("list");
                 let ty = self.r#gen.type_name(element);
                 // TODO see listlower
                 let size_wasm32 = self.r#gen.r#gen.sizes.size(element).format("4");
-                let index = self.locals.tmp("i");
+                let length = self.locals.tmp("length");
+                let cursor = self.locals.tmp("cursor");
 
                 let result = &block_results[0];
 
@@ -3021,11 +3025,14 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                 uwrite!(
                     self.src,
                     "
+                    val {length} = {length_operand}
                     val {list} = kotlin.collections.ArrayList<{ty}>({length})
-                    for ({index} in 0 until {length}) {{
-                        val base = ({address}) + ({index} * {size_wasm32})
+                    var {cursor} = {address}
+                    repeat({length}) {{
+                        val base = {cursor}
                         {body}
                         {list}.add({result})
+                        {cursor} += {size_wasm32}
                     }}
                     "
                 );
@@ -3546,6 +3553,36 @@ mod tests {
         let internal = &files["InternalRunner.kt"];
         assert!(internal.contains("Status.entries[p0]"));
         assert!(!internal.contains("Status.values()"));
+    }
+
+    #[test]
+    fn generic_lists_use_linear_pointer_iteration() {
+        let files = generate_files(
+            None,
+            r#"
+                package example:lists;
+
+                interface api {
+                    record item { value: u32 }
+                    round-trip: func(items: list<list<item>>) -> list<list<item>>;
+                }
+
+                world runner {
+                    export api;
+                }
+            "#,
+            Opts::default(),
+        )
+        .unwrap();
+
+        let internal = &files["InternalRunner.kt"];
+        assert_eq!(internal.matches("val values").count(), 2);
+        assert_eq!(internal.matches("for (el in values").count(), 2);
+        assert_eq!(internal.matches("repeat(length").count(), 2);
+        assert_eq!(internal.matches("val base = cursor").count(), 4);
+        assert!(!internal.contains("for (el in el)"));
+        assert!(!internal.contains("withIndex()"));
+        assert!(!internal.contains("0 until"));
     }
 
     #[test]

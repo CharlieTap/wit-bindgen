@@ -22,7 +22,7 @@ fun __wasm_export_quote(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int, p3: kotl
   bindings.runtime.STRING_FROM_MEM(p6, p7),
   ))
 
-  val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(32+6*4), align=8)*/ allocator.allocate((32+6*4)).address.toInt()
+  val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(32+8*4), align=8)*/ allocator.allocate((32+8*4)).address.toInt()
   val len = result.sku.length
   val ptr0 = allocator.writeToLinearMemory(result.sku).address.toInt()
   (ptr + 4).ptr.storeInt(len)
@@ -30,15 +30,32 @@ fun __wasm_export_quote(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int, p3: kotl
   (ptr + (2*4)).ptr.storeLong(result.subtotalMinor)
   (ptr + (8+2*4)).ptr.storeLong(result.discountMinor)
   (ptr + (16+2*4)).ptr.storeLong(result.taxMinor)
-  (ptr + (24+2*4)).ptr.storeLong(result.totalMinor)
-  val len2 = result.currency.length
-  val ptr1 = allocator.writeToLinearMemory(result.currency).address.toInt()
-  (ptr + (32+3*4)).ptr.storeInt(len2)
-  (ptr + (32+2*4)).ptr.storeInt(ptr1)
-  val len4 = result.summary.length
-  val ptr3 = allocator.writeToLinearMemory(result.summary).address.toInt()
+
+  val values = result.adjustments
+  val length = values.size
+  val address = allocator.allocate(length * (8+2*4) /*, align_wasm32=8*/).address.toInt()
+  var cursor = address
+  for (el in values) {
+    val base = cursor
+    val len2 = el.description.length
+    val ptr1 = allocator.writeToLinearMemory(el.description).address.toInt()
+    (base + 4).ptr.storeInt(len2)
+    (base + 0).ptr.storeInt(ptr1)
+    (base + (2*4)).ptr.storeLong(el.amountMinor)
+
+    cursor += (8+2*4)
+  }
+  (ptr + (24+3*4)).ptr.storeInt(length)
+  (ptr + (24+2*4)).ptr.storeInt(address)
+  (ptr + (24+4*4)).ptr.storeLong(result.totalMinor)
+  val len4 = result.currency.length
+  val ptr3 = allocator.writeToLinearMemory(result.currency).address.toInt()
   (ptr + (32+5*4)).ptr.storeInt(len4)
   (ptr + (32+4*4)).ptr.storeInt(ptr3)
+  val len6 = result.summary.length
+  val ptr5 = allocator.writeToLinearMemory(result.summary).address.toInt()
+  (ptr + (32+7*4)).ptr.storeInt(len6)
+  (ptr + (32+6*4)).ptr.storeInt(ptr5)
   return ptr
 }
 }

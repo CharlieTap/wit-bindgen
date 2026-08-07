@@ -26,11 +26,17 @@ data class QuoteRequest(
     val currency: String,
 )
 
+data class LineItem(
+    val description: String,
+    val amountMinor: Long,
+)
+
 data class Quote(
     val sku: String,
     val subtotalMinor: Long,
     val discountMinor: Long,
     val taxMinor: Long,
+    val adjustments: List<LineItem>,
     val totalMinor: Long,
     val currency: String,
     val summary: String,
@@ -72,6 +78,10 @@ class StandardPricingService : PricingService {
             subtotalMinor = subtotalMinor,
             discountMinor = discountMinor,
             taxMinor = taxMinor,
+            adjustments = listOf(
+                LineItem(description = "Discount", amountMinor = -discountMinor),
+                LineItem(description = "Tax", amountMinor = taxMinor),
+            ),
             totalMinor = totalMinor,
             currency = request.currency,
             summary = "${request.sku} x $quantity = ${request.currency} $totalMinor minor units",

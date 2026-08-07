@@ -20,6 +20,13 @@ class StandardPricingServiceTest {
         assertEquals(37_500, quote.subtotalMinor)
         assertEquals(1_687, quote.discountMinor)
         assertEquals(7_162, quote.taxMinor)
+        assertEquals(
+            listOf(
+                LineItem(description = "Discount", amountMinor = -1_687),
+                LineItem(description = "Tax", amountMinor = 7_162),
+            ),
+            quote.adjustments,
+        )
         assertEquals(42_975, quote.totalMinor)
         assertEquals("APEX-PRO x 30 = GBP 42975 minor units", quote.summary)
     }

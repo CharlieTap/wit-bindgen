@@ -23,11 +23,17 @@ interface pricing-types {
         currency: string,
     }
 
+    record line-item {
+        description: string,
+        amount-minor: s64,
+    }
+
     record price-quote {
         sku: string,
         subtotal-minor: s64,
         discount-minor: s64,
         tax-minor: s64,
+        adjustments: list<line-item>,
         total-minor: s64,
         currency: string,
         summary: string,
