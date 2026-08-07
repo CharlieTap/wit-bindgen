@@ -28,6 +28,21 @@ interface pricing-types {
         amount-minor: s64,
     }
 
+    record pricing-model-data {
+        eligibility-flags: list<bool>,
+        feature-bytes: list<u8>,
+        signed-feature-bytes: list<s8>,
+        category-codes: list<u16>,
+        seasonal-adjustments: list<s16>,
+        observation-counts: list<u32>,
+        demand-adjustments: list<s32>,
+        revenue-buckets: list<u64>,
+        balance-adjustments: list<s64>,
+        confidence-scores: list<f32>,
+        calibration-values: list<f64>,
+        currency-symbols: list<char>,
+    }
+
     record price-quote {
         sku: string,
         subtotal-minor: s64,
@@ -37,6 +52,7 @@ interface pricing-types {
         total-minor: s64,
         currency: string,
         summary: string,
+        model-data: pricing-model-data,
     }
 
 }

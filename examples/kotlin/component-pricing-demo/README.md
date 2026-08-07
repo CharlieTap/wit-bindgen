@@ -15,6 +15,10 @@ The Kotlin bindings and embedded component metadata both select the canonical
 ABI's UTF-16 string encoding, allowing Kotlin strings to be copied as their
 native UTF-16 code units without UTF-8 transcoding.
 
+The demo also selects `--primitive-lists arrays`. Its `pricing-model-data`
+record covers every WIT primitive list representation and maps them to Kotlin's
+unboxed primitive arrays.
+
 The relevant layers are:
 
 - `src/commonMain`: the Kotlin-owned interface, domain types, and implementation.

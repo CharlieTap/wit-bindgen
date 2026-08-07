@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalUnsignedTypes::class)
+
 package pricing
 
 interface PricingService {
@@ -31,6 +33,21 @@ data class LineItem(
     val amountMinor: Long,
 )
 
+data class PricingModelData(
+    val eligibilityFlags: BooleanArray,
+    val featureBytes: UByteArray,
+    val signedFeatureBytes: ByteArray,
+    val categoryCodes: UShortArray,
+    val seasonalAdjustments: ShortArray,
+    val observationCounts: UIntArray,
+    val demandAdjustments: IntArray,
+    val revenueBuckets: ULongArray,
+    val balanceAdjustments: LongArray,
+    val confidenceScores: FloatArray,
+    val calibrationValues: DoubleArray,
+    val currencySymbols: IntArray,
+)
+
 data class Quote(
     val sku: String,
     val subtotalMinor: Long,
@@ -40,6 +57,7 @@ data class Quote(
     val totalMinor: Long,
     val currency: String,
     val summary: String,
+    val modelData: PricingModelData,
 )
 
 class StandardPricingService : PricingService {
@@ -85,6 +103,20 @@ class StandardPricingService : PricingService {
             totalMinor = totalMinor,
             currency = request.currency,
             summary = "${request.sku} x $quantity = ${request.currency} $totalMinor minor units",
+            modelData = PricingModelData(
+                eligibilityFlags = booleanArrayOf(true, quantity >= 10, discountMinor > 0),
+                featureBytes = ubyteArrayOf(1u, 127u, 255u),
+                signedFeatureBytes = byteArrayOf(-128, 0, 127),
+                categoryCodes = ushortArrayOf(1u, 32_768u, 65_535u),
+                seasonalAdjustments = shortArrayOf(-1_000, 0, 1_000),
+                observationCounts = uintArrayOf(0u, quantity.toUInt(), UInt.MAX_VALUE),
+                demandAdjustments = intArrayOf(-quantity, 0, quantity),
+                revenueBuckets = ulongArrayOf(0uL, totalMinor.toULong(), ULong.MAX_VALUE),
+                balanceAdjustments = longArrayOf(-totalMinor, 0, totalMinor),
+                confidenceScores = floatArrayOf(0.25f, 0.5f, 0.99f),
+                calibrationValues = doubleArrayOf(-1.0, 0.0, 1.0),
+                currencySymbols = intArrayOf('G'.code, 'B'.code, 'P'.code, 0x1F4B7),
+            ),
         )
     }
 }

@@ -28,6 +28,7 @@ generate: bindgen
 	$(WIT_BINDGEN) kotlin \
 		--kotlin-package-name bindings \
 		--string-encoding utf16 \
+		--primitive-lists arrays \
 		--with 'example:pricing/pricing-types@1.0.0=pricing' \
 		--with 'example:pricing/pricing-types@1.0.0/price-quote=pricing.Quote' \
 		--out-dir $(GENERATED) \

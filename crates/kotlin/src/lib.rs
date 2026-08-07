@@ -294,6 +294,14 @@ impl fmt::Display for MissingWith {
 
 impl std::error::Error for MissingWith {}
 
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+pub enum PrimitiveLists {
+    #[default]
+    Lists,
+    Arrays,
+}
+
 #[derive(Default, Debug, Clone)]
 #[cfg_attr(feature = "clap", derive(clap::Args))]
 pub struct Opts {
@@ -353,6 +361,13 @@ pub struct Opts {
         )
     )]
     pub string_encoding: StringEncoding,
+
+    /// Represent lists of WIT primitive types with unboxed Kotlin arrays.
+    #[cfg_attr(
+        feature = "clap",
+        arg(long, value_enum, default_value_t = PrimitiveLists::default())
+    )]
+    pub primitive_lists: PrimitiveLists,
 }
 
 impl Opts {
@@ -609,13 +624,20 @@ impl WorldGenerator for Kotlin {
             self.opts.kotlin_package_name,
             Opts::SUPPORT_KT_SUBPACKAGE
         );
-        let file_opt_in = "@file:OptIn(kotlin.wasm.unsafe.UnsafeWasmMemoryApi::class, kotlin.wasm.ExperimentalWasmInterop::class, kotlin.wasm.unsafe.ComponentModelInternalApi::class)";
+        let component_model_opt_ins = "kotlin.wasm.unsafe.UnsafeWasmMemoryApi::class, kotlin.wasm.ExperimentalWasmInterop::class, kotlin.wasm.unsafe.ComponentModelInternalApi::class";
+        let unsigned_arrays_opt_in = match self.opts.primitive_lists {
+            PrimitiveLists::Lists => "",
+            PrimitiveLists::Arrays => ", kotlin.ExperimentalUnsignedTypes::class",
+        };
+        let file_opt_in = format!("@file:OptIn({component_model_opt_ins}{unsigned_arrays_opt_in})");
         let file_opt_ins = format!("{file_opt_in}\n@file:Suppress(\"REDUNDANT_ELSE_IN_WHEN\")\n");
         let support_file_opt_ins = match self.opts.string_encoding {
             StringEncoding::UTF16 => format!(
-                "{file_opt_in}\n@file:Suppress(\"REDUNDANT_ELSE_IN_WHEN\", \"INVISIBLE_MEMBER\", \"INVISIBLE_REFERENCE\")\n"
+                "@file:OptIn({component_model_opt_ins})\n@file:Suppress(\"REDUNDANT_ELSE_IN_WHEN\", \"INVISIBLE_MEMBER\", \"INVISIBLE_REFERENCE\")\n"
             ),
-            StringEncoding::UTF8 | StringEncoding::CompactUTF16 => file_opt_ins.clone(),
+            StringEncoding::UTF8 | StringEncoding::CompactUTF16 => format!(
+                "@file:OptIn({component_model_opt_ins})\n@file:Suppress(\"REDUNDANT_ELSE_IN_WHEN\")\n"
+            ),
         };
         // NOTE we generate redundant else branches sometimes to be defensive
         let custom_kotlin_imports_declaration = {
@@ -1027,6 +1049,9 @@ impl WorldGenerator for Kotlin {
             let mut stubs_kt = Source::default();
             wit_bindgen_core::generated_preamble(&mut stubs_kt, version);
             // TODO consider different package & outdir for export stubs
+            if self.opts.primitive_lists == PrimitiveLists::Arrays {
+                stubs_kt.push_str("@file:OptIn(kotlin.ExperimentalUnsignedTypes::class)\n\n");
+            }
             stubs_kt.push_str(&format!("package {}\n\n", self.opts.kotlin_package_name));
             stubs_kt.push_str(&self.export_stubs_src);
             files.push(
@@ -1765,6 +1790,31 @@ impl<'a> wit_bindgen_core::InterfaceGenerator<'a> for InterfaceGenerator<'a> {
 }
 
 impl InterfaceGenerator<'_> {
+    fn primitive_array_name(&self, element: &Type) -> Option<&'static str> {
+        if self.r#gen.opts.primitive_lists != PrimitiveLists::Arrays {
+            return None;
+        }
+
+        match element {
+            Type::Bool => Some("kotlin.BooleanArray"),
+            Type::U8 => Some("kotlin.UByteArray"),
+            Type::S8 => Some("kotlin.ByteArray"),
+            Type::U16 => Some("kotlin.UShortArray"),
+            Type::S16 => Some("kotlin.ShortArray"),
+            Type::U32 => Some("kotlin.UIntArray"),
+            Type::S32 | Type::Char => Some("kotlin.IntArray"),
+            Type::U64 => Some("kotlin.ULongArray"),
+            Type::S64 => Some("kotlin.LongArray"),
+            Type::F32 => Some("kotlin.FloatArray"),
+            Type::F64 => Some("kotlin.DoubleArray"),
+            Type::Id(id) => match &self.resolve.types[*id].kind {
+                TypeDefKind::Type(ty) => self.primitive_array_name(ty),
+                _ => None,
+            },
+            Type::String | Type::ErrorContext => None,
+        }
+    }
+
     /// This refers to the prefix for functions that the host has to expose to support resources, e.g.:
     /// - a drop function to drop the resource (always)
     /// - a new function, to create a new instance of the resource (not for imported resources, as instances of imported resources cannot be created by the importer)
@@ -1983,9 +2033,13 @@ impl InterfaceGenerator<'_> {
                 dst.push_str(">");
             }
             TypeDefKind::List(ty) => {
-                dst.push_str("kotlin.collections.List<");
-                self.push_type_name(ty, dst);
-                dst.push_str(">");
+                if let Some(array) = self.primitive_array_name(ty) {
+                    dst.push_str(array);
+                } else {
+                    dst.push_str("kotlin.collections.List<");
+                    self.push_type_name(ty, dst);
+                    dst.push_str(">");
+                }
             }
             TypeDefKind::Future(_) => unimplemented!(),
             TypeDefKind::Stream(_) => unimplemented!(),
@@ -2988,7 +3042,35 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                 let cursor = self.locals.tmp("cursor");
 
                 // TODO think about wasm32 vs 64
-
+                let mut iteration = String::new();
+                if self.r#gen.primitive_array_name(element).is_some() {
+                    let index = self.locals.tmp("index");
+                    uwrite!(
+                        iteration,
+                        "
+                        var {index} = 0
+                        while ({index} < {length}) {{
+                            val el = {values}[{index}]
+                            val base = {cursor}
+                            {body}
+                            {cursor} += {size_wasm32}
+                            {index}++
+                        }}
+                        "
+                    );
+                } else {
+                    uwrite!(
+                        iteration,
+                        "
+                        for (el in {values}) {{
+                            val base = {cursor}
+                            {body}
+                            {cursor} += {size_wasm32}
+                        }}
+                        "
+                    );
+                }
+                let iteration = iteration.trim();
                 uwrite!(
                     self.src,
                     "
@@ -2996,11 +3078,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                     val {length} = {values}.size
                     val {address} = allocator.allocate({length} * {size_wasm32} /*, align_wasm32={align_wasm32}*/).address.toInt()
                     var {cursor} = {address}
-                    for (el in {values}) {{
-                        val base = {cursor}
-                        {body}
-                        {cursor} += {size_wasm32}
-                    }}
+                    {iteration}
                     "
                 );
 
@@ -3013,7 +3091,6 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                 let address = &operands[0];
                 let length_operand = &operands[1];
                 let list = self.locals.tmp("list");
-                let ty = self.r#gen.type_name(element);
                 // TODO see listlower
                 let size_wasm32 = self.r#gen.r#gen.sizes.size(element).format("4");
                 let length = self.locals.tmp("length");
@@ -3021,19 +3098,51 @@ impl Bindgen for FunctionBindgen<'_, '_> {
 
                 let result = &block_results[0];
 
-                // TODO(Kotlin): Primitive array types
+                let primitive_array = self.r#gen.primitive_array_name(element);
+                let initializer = match primitive_array {
+                    Some(array) => format!("{array}({length})"),
+                    None => {
+                        let ty = self.r#gen.type_name(element);
+                        format!("kotlin.collections.ArrayList<{ty}>({length})")
+                    }
+                };
+                let mut iteration = String::new();
+                if primitive_array.is_some() {
+                    let index = self.locals.tmp("index");
+                    uwrite!(
+                        iteration,
+                        "
+                        var {index} = 0
+                        while ({index} < {length}) {{
+                            val base = {cursor}
+                            {body}
+                            {list}[{index}] = {result}
+                            {cursor} += {size_wasm32}
+                            {index}++
+                        }}
+                        "
+                    );
+                } else {
+                    uwrite!(
+                        iteration,
+                        "
+                        repeat({length}) {{
+                            val base = {cursor}
+                            {body}
+                            {list}.add({result})
+                            {cursor} += {size_wasm32}
+                        }}
+                        "
+                    );
+                }
+                let iteration = iteration.trim();
                 uwrite!(
                     self.src,
                     "
                     val {length} = {length_operand}
-                    val {list} = kotlin.collections.ArrayList<{ty}>({length})
+                    val {list} = {initializer}
                     var {cursor} = {address}
-                    repeat({length}) {{
-                        val base = {cursor}
-                        {body}
-                        {list}.add({result})
-                        {cursor} += {size_wasm32}
-                    }}
+                    {iteration}
                     "
                 );
 
@@ -3581,6 +3690,76 @@ mod tests {
         assert_eq!(internal.matches("repeat(length").count(), 2);
         assert_eq!(internal.matches("val base = cursor").count(), 4);
         assert!(!internal.contains("for (el in el)"));
+        assert!(!internal.contains("withIndex()"));
+        assert!(!internal.contains("0 until"));
+    }
+
+    #[test]
+    fn primitive_lists_use_unboxed_arrays() {
+        let files = generate_files(
+            None,
+            r#"
+                package example:lists;
+
+                interface api {
+                    type aliased-s32 = s32;
+
+                    record primitives {
+                        booleans: list<bool>,
+                        u8s: list<u8>,
+                        s8s: list<s8>,
+                        u16s: list<u16>,
+                        s16s: list<s16>,
+                        u32s: list<u32>,
+                        s32s: list<s32>,
+                        u64s: list<u64>,
+                        s64s: list<s64>,
+                        f32s: list<f32>,
+                        f64s: list<f64>,
+                        chars: list<char>,
+                        aliases: list<aliased-s32>,
+                    }
+
+                    round-trip: func(value: primitives) -> primitives;
+                }
+
+                world runner {
+                    export api;
+                }
+            "#,
+            Opts {
+                primitive_lists: PrimitiveLists::Arrays,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let public = &files["Runner.kt"];
+        for array in [
+            "kotlin.BooleanArray",
+            "kotlin.UByteArray",
+            "kotlin.ByteArray",
+            "kotlin.UShortArray",
+            "kotlin.ShortArray",
+            "kotlin.UIntArray",
+            "kotlin.IntArray",
+            "kotlin.ULongArray",
+            "kotlin.LongArray",
+            "kotlin.FloatArray",
+            "kotlin.DoubleArray",
+        ] {
+            assert!(public.contains(array), "missing {array}");
+        }
+        assert_eq!(public.matches("kotlin.IntArray").count(), 3);
+        assert!(public.contains("kotlin.ExperimentalUnsignedTypes::class"));
+
+        let internal = &files["InternalRunner.kt"];
+        assert_eq!(internal.matches("while (index").count(), 26);
+        assert_eq!(internal.matches("val el = values").count(), 13);
+        assert_eq!(internal.matches("val base = cursor").count(), 26);
+        assert!(!internal.contains("kotlin.collections.ArrayList"));
+        assert!(!internal.contains("for (el in values"));
+        assert!(!internal.contains("repeat(length"));
         assert!(!internal.contains("withIndex()"));
         assert!(!internal.contains("0 until"));
     }
