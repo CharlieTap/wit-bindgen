@@ -27,6 +27,7 @@ generate: bindgen
 	mkdir -p $(GENERATED)
 	$(WIT_BINDGEN) kotlin \
 		--kotlin-package-name bindings \
+		--string-encoding utf16 \
 		--with 'example:pricing/pricing-types@1.0.0=pricing' \
 		--with 'example:pricing/pricing-types@1.0.0/price-quote=pricing.Quote' \
 		--out-dir $(GENERATED) \
@@ -39,7 +40,7 @@ compile: generate
 	JAVA_HOME=$(JAVA_HOME) ./gradlew compileProductionExecutableKotlinWasmWasiOptimize
 
 component: compile $(ADAPTER)
-	wasm-tools component embed --encoding utf8 wit $(CORE_WASM) --output $(EMBEDDED_WASM)
+	wasm-tools component embed --encoding utf16 wit $(CORE_WASM) --output $(EMBEDDED_WASM)
 	wasm-tools component new $(EMBEDDED_WASM) --adapt wasi_snapshot_preview1=$(ADAPTER) --output $(COMPONENT_WASM)
 
 inspect: component

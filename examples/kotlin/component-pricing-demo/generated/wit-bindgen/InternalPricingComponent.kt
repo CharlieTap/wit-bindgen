@@ -23,31 +23,22 @@ fun __wasm_export_quote(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int, p3: kotl
   ))
 
   val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(32+6*4), align=8)*/ allocator.allocate((32+6*4)).address.toInt()
-
-  val bytearray = result.sku.encodeToByteArray()
-  val len = bytearray.size
-  val ptr0 = allocator.writeToLinearMemory(bytearray).address.toInt()
-
+  val len = result.sku.length
+  val ptr0 = allocator.writeToLinearMemory(result.sku).address.toInt()
   (ptr + 4).ptr.storeInt(len)
   (ptr + 0).ptr.storeInt(ptr0)
   (ptr + (2*4)).ptr.storeLong(result.subtotalMinor)
   (ptr + (8+2*4)).ptr.storeLong(result.discountMinor)
   (ptr + (16+2*4)).ptr.storeLong(result.taxMinor)
   (ptr + (24+2*4)).ptr.storeLong(result.totalMinor)
-
-  val bytearray3 = result.currency.encodeToByteArray()
-  val len2 = bytearray3.size
-  val ptr1 = allocator.writeToLinearMemory(bytearray3).address.toInt()
-
+  val len2 = result.currency.length
+  val ptr1 = allocator.writeToLinearMemory(result.currency).address.toInt()
   (ptr + (32+3*4)).ptr.storeInt(len2)
   (ptr + (32+2*4)).ptr.storeInt(ptr1)
-
-  val bytearray6 = result.summary.encodeToByteArray()
-  val len5 = bytearray6.size
-  val ptr4 = allocator.writeToLinearMemory(bytearray6).address.toInt()
-
-  (ptr + (32+5*4)).ptr.storeInt(len5)
-  (ptr + (32+4*4)).ptr.storeInt(ptr4)
+  val len4 = result.summary.length
+  val ptr3 = allocator.writeToLinearMemory(result.summary).address.toInt()
+  (ptr + (32+5*4)).ptr.storeInt(len4)
+  (ptr + (32+4*4)).ptr.storeInt(ptr3)
   return ptr
 }
 }

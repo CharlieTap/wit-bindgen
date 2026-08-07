@@ -11,6 +11,10 @@ interface onto the existing application-owned `pricing` package. The generated
 pricing export therefore uses `QuoteRequest` and an explicit `price-quote` to
 `Quote` type remapping rather than generating duplicate domain types.
 
+The Kotlin bindings and embedded component metadata both select the canonical
+ABI's UTF-16 string encoding, allowing Kotlin strings to be copied as their
+native UTF-16 code units without UTF-8 transcoding.
+
 The relevant layers are:
 
 - `src/commonMain`: the Kotlin-owned interface, domain types, and implementation.

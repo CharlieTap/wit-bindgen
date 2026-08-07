@@ -11,6 +11,7 @@ use wit_bindgen_core::{
     Direction, Files, InterfaceGenerator as _, Ns, Source, WorldGenerator, dealias, uwrite,
     uwriteln, wit_parser::*,
 };
+use wit_component::StringEncoding;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum OutsideKind {
@@ -341,6 +342,17 @@ pub struct Opts {
     /// generated.
     #[cfg_attr(feature = "clap", arg(long))]
     pub generate_all: bool,
+
+    /// Set the canonical ABI string encoding.
+    #[cfg_attr(
+        feature = "clap",
+        arg(
+            long,
+            default_value_t = StringEncoding::default(),
+            value_name = "ENCODING",
+        )
+    )]
+    pub string_encoding: StringEncoding,
 }
 
 impl Opts {
@@ -584,6 +596,9 @@ impl WorldGenerator for Kotlin {
 
     fn finish(&mut self, resolve: &Resolve, id: WorldId, files: &mut Files) -> Result<()> {
         Self::verify_generatability(&self.generation_plan)?;
+        if self.opts.string_encoding == StringEncoding::CompactUTF16 {
+            bail!("compact UTF-16 is not supported by the Kotlin backend");
+        }
 
         let world = &resolve.worlds[id];
 
@@ -594,8 +609,14 @@ impl WorldGenerator for Kotlin {
             self.opts.kotlin_package_name,
             Opts::SUPPORT_KT_SUBPACKAGE
         );
-        let file_opt_ins = "@file:OptIn(kotlin.wasm.unsafe.UnsafeWasmMemoryApi::class, kotlin.wasm.ExperimentalWasmInterop::class, kotlin.wasm.unsafe.ComponentModelInternalApi::class)
-@file:Suppress(\"REDUNDANT_ELSE_IN_WHEN\")\n";
+        let file_opt_in = "@file:OptIn(kotlin.wasm.unsafe.UnsafeWasmMemoryApi::class, kotlin.wasm.ExperimentalWasmInterop::class, kotlin.wasm.unsafe.ComponentModelInternalApi::class)";
+        let file_opt_ins = format!("{file_opt_in}\n@file:Suppress(\"REDUNDANT_ELSE_IN_WHEN\")\n");
+        let support_file_opt_ins = match self.opts.string_encoding {
+            StringEncoding::UTF16 => format!(
+                "{file_opt_in}\n@file:Suppress(\"REDUNDANT_ELSE_IN_WHEN\", \"INVISIBLE_MEMBER\", \"INVISIBLE_REFERENCE\")\n"
+            ),
+            StringEncoding::UTF8 | StringEncoding::CompactUTF16 => file_opt_ins.clone(),
+        };
         // NOTE we generate redundant else branches sometimes to be defensive
         let custom_kotlin_imports_declaration = {
             // TODO maybe do backticks for package name?
@@ -614,7 +635,7 @@ impl WorldGenerator for Kotlin {
             kotlin_imports
         };
 
-        let file_prelude = |package: &str| {
+        let file_prelude = |package: &str, file_opt_ins: &str| {
             format!("
                 {file_opt_ins}
                 package {package}
@@ -627,7 +648,7 @@ impl WorldGenerator for Kotlin {
         let mut kt_str = Source::default();
         wit_bindgen_core::generated_preamble(&mut kt_str, version);
 
-        uwriteln!(kt_str, "{}", file_prelude(self.opts.kotlin_package_name.as_str()));
+        uwriteln!(kt_str, "{}", file_prelude(self.opts.kotlin_package_name.as_str(), &file_opt_ins));
 
         // move generation plan out, so that we don't borrow from self twice
         let mut generation_plan = mem::take(&mut self.generation_plan);
@@ -817,7 +838,7 @@ impl WorldGenerator for Kotlin {
         let mut private_kt_str = Source::default();
         wit_bindgen_core::generated_preamble(&mut private_kt_str, version);
 
-        uwriteln!(private_kt_str, "{}", file_prelude(self.opts.kotlin_package_name.as_str()));
+        uwriteln!(private_kt_str, "{}", file_prelude(self.opts.kotlin_package_name.as_str(), &file_opt_ins));
         private_kt_str.push_str(&self.private_src);
         files.push(
             &format!("Internal{}.kt", world.name.to_upper_camel_case()),
@@ -869,8 +890,16 @@ impl WorldGenerator for Kotlin {
                 "".to_string()
             };
 
+            let mut public_string_support = Source::default();
+            self.push_public_string_support(&mut public_string_support, &user_vis_or_empty);
+            let public_string_support = String::from(public_string_support);
+
+            let mut internal_string_support = Source::default();
+            self.push_internal_string_support(&mut internal_string_support, &user_vis_or_internal);
+            let internal_string_support = String::from(internal_string_support);
+
             wit_bindgen_core::generated_preamble(&mut support_kt_str, version);
-            uwriteln!(support_kt_str, "{}", file_prelude(support_kt_package.as_str()));
+            uwriteln!(support_kt_str, "{}", file_prelude(support_kt_package.as_str(), &support_file_opt_ins));
             uwriteln!(support_kt_str,
                 "
                 import kotlin.wasm.unsafe.*
@@ -903,12 +932,7 @@ impl WorldGenerator for Kotlin {
 
             {cabi_realloc_export_declaration_or_nothing}
 
-            {user_vis_or_empty}fun MemoryAllocator.STRING_TO_MEM(s: String): Int =
-                writeToLinearMemory(s.encodeToByteArray()).address.toInt()
-
-            {user_vis_or_empty}fun STRING_FROM_MEM(addr: Int, len: Int): String =
-                loadByteArray(addr.ptr, len).decodeToString()
-
+            {public_string_support}
             {user_vis_or_empty}fun MALLOC(size: Int, align: Int): Int = TODO()
 
             {user_vis_or_empty}val Int.ptr: Pointer
@@ -919,12 +943,7 @@ impl WorldGenerator for Kotlin {
             {user_vis_or_empty}fun Pointer.loadUInt(): UInt = loadInt().toUInt()
             {user_vis_or_empty}fun Pointer.loadULong(): ULong = loadLong().toULong()
 
-            {user_vis_or_internal}fun MemoryAllocator.writeToLinearMemory(value: String): Pointer =
-                writeToLinearMemory(value.encodeToByteArray())
-
-            {user_vis_or_internal}fun loadString(addr: Pointer, size: Int): String =
-                loadByteArray(addr, size).decodeToString()
-            {user_vis_or_internal}fun loadByteArray(addr: Pointer, size: Int): ByteArray =
+            {internal_string_support}{user_vis_or_internal}fun loadByteArray(addr: Pointer, size: Int): ByteArray =
                 ByteArray(size) {{ i -> (addr + i).loadByte() }}
             {user_vis_or_internal}fun MemoryAllocator.writeToLinearMemory(array: ByteArray): Pointer {{
                 val pointer = allocate(array.size)
@@ -1035,6 +1054,81 @@ impl WorldGenerator for Kotlin {
 }
 
 impl Kotlin {
+    fn push_public_string_support(&self, src: &mut Source, visibility: &str) {
+        match self.opts.string_encoding {
+            StringEncoding::UTF8 => {
+                uwriteln!(
+                    src,
+                    "{visibility}fun MemoryAllocator.STRING_TO_MEM(s: String): Int =
+                        writeToLinearMemory(s.encodeToByteArray()).address.toInt()"
+                );
+                uwriteln!(
+                    src,
+                    "
+                    {visibility}fun STRING_FROM_MEM(addr: Int, len: Int): String =
+                        loadByteArray(addr.ptr, len).decodeToString()"
+                );
+            }
+            StringEncoding::UTF16 => {
+                uwriteln!(
+                    src,
+                    "{visibility}fun MemoryAllocator.STRING_TO_MEM(s: String): Int =
+                        writeToLinearMemory(s).address.toInt()"
+                );
+                uwriteln!(
+                    src,
+                    "
+                    {visibility}fun STRING_FROM_MEM(addr: Int, len: Int): String {{
+                        val chars = kotlin.wasm.internal.WasmCharArray(len)
+                        kotlin.wasm.internal.unsafeRawMemoryToWasmCharArray(addr, 0, len, chars)
+                        return chars.createString()
+                    }}"
+                );
+            }
+            StringEncoding::CompactUTF16 => unreachable!(),
+        }
+    }
+
+    fn push_internal_string_support(&self, src: &mut Source, visibility: &str) {
+        match self.opts.string_encoding {
+            StringEncoding::UTF8 => {
+                uwriteln!(
+                    src,
+                    "{visibility}fun MemoryAllocator.writeToLinearMemory(value: String): Pointer =
+                        writeToLinearMemory(value.encodeToByteArray())"
+                );
+                uwriteln!(
+                    src,
+                    "
+                    {visibility}fun loadString(addr: Pointer, size: Int): String =
+                        loadByteArray(addr, size).decodeToString()"
+                );
+            }
+            StringEncoding::UTF16 => {
+                uwriteln!(
+                    src,
+                    "{visibility}fun MemoryAllocator.writeToLinearMemory(value: String): Pointer {{
+                        val pointer = allocate(value.length * 2)
+                        kotlin.wasm.internal.unsafeWasmCharArrayToRawMemory(
+                            value.getChars(),
+                            0,
+                            value.length,
+                            pointer.address.toInt(),
+                        )
+                        return pointer
+                    }}"
+                );
+                uwriteln!(
+                    src,
+                    "
+                    {visibility}fun loadString(addr: Pointer, size: Int): String =
+                        STRING_FROM_MEM(addr.address.toInt(), size)"
+                );
+            }
+            StringEncoding::CompactUTF16 => unreachable!(),
+        }
+    }
+
     fn interface<'a>(
         &'a mut self,
         resolve: &'a Resolve,
@@ -2843,17 +2937,27 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                 let op = &operands[0];
                 let ptr = self.locals.tmp("ptr");
                 let len = self.locals.tmp("len");
-                let bytearray = self.locals.tmp("bytearray");
 
                 // TODO(Kotlin): Post-return cleanup
-                uwriteln!(
-                    self.src,
-                    "
-                    val {bytearray} = {op}.encodeToByteArray()
-                    val {len} = {bytearray}.size
-                    val {ptr} = allocator.writeToLinearMemory({bytearray}).address.toInt()
-                    "
-                );
+                match self.r#gen.r#gen.opts.string_encoding {
+                    StringEncoding::UTF8 => {
+                        let bytearray = self.locals.tmp("bytearray");
+                        uwriteln!(self.src, "val {bytearray} = {op}.encodeToByteArray()");
+                        uwriteln!(self.src, "val {len} = {bytearray}.size");
+                        uwriteln!(
+                            self.src,
+                            "val {ptr} = allocator.writeToLinearMemory({bytearray}).address.toInt()"
+                        );
+                    }
+                    StringEncoding::UTF16 => {
+                        uwriteln!(self.src, "val {len} = {op}.length");
+                        uwriteln!(
+                            self.src,
+                            "val {ptr} = allocator.writeToLinearMemory({op}).address.toInt()"
+                        );
+                    }
+                    StringEncoding::CompactUTF16 => {}
+                }
 
                 results.push(format!("{ptr}"));
                 results.push(format!("{len}"));
@@ -3324,7 +3428,23 @@ mod tests {
         }
     "#;
 
-    fn generate(dependency: Option<&str>, main: &str, mut opts: Opts) -> Result<String> {
+    const STRINGS: &str = r#"
+        package example:strings;
+
+        interface api {
+            echo: func(value: string) -> string;
+        }
+
+        world runner {
+            export api;
+        }
+    "#;
+
+    fn generate_files(
+        dependency: Option<&str>,
+        main: &str,
+        mut opts: Opts,
+    ) -> Result<HashMap<String, String>> {
         let mut resolve = Resolve::default();
         if let Some(dependency) = dependency {
             resolve.push_str("dependency.wit", dependency)?;
@@ -3336,11 +3456,23 @@ mod tests {
             opts.kotlin_package_name = "bindings".into();
         }
         opts.build().generate(&mut resolve, world, &mut files)?;
-        let (_, contents) = files
+        Ok(files
             .iter()
+            .map(|(name, contents)| {
+                (
+                    name.to_string(),
+                    String::from_utf8(contents.to_vec()).unwrap(),
+                )
+            })
+            .collect())
+    }
+
+    fn generate(dependency: Option<&str>, main: &str, opts: Opts) -> Result<String> {
+        Ok(generate_files(dependency, main, opts)?
+            .into_iter()
             .find(|(name, _)| !name.starts_with("Internal") && !name.contains('/'))
-            .unwrap();
-        Ok(String::from_utf8(contents.to_vec()).unwrap())
+            .unwrap()
+            .1)
     }
 
     #[cfg(feature = "clap")]
@@ -3356,6 +3488,56 @@ mod tests {
         assert_eq!(
             parse_with("dependency:types/api").unwrap_err(),
             "expected string of form `<key>=<value>[,<key>=<value>...]`; got `dependency:types/api`"
+        );
+    }
+
+    #[test]
+    fn utf16_strings_use_kotlin_code_units_directly() {
+        let files = generate_files(
+            None,
+            STRINGS,
+            Opts {
+                string_encoding: StringEncoding::UTF16,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let internal = &files["InternalRunner.kt"];
+        assert!(internal.contains(".length"));
+        assert!(internal.contains("allocator.writeToLinearMemory("));
+        assert!(!internal.contains("encodeToByteArray"));
+
+        let support = &files["runtime/ComponentSupport.kt"];
+        assert!(support.contains("unsafeRawMemoryToWasmCharArray"));
+        assert!(support.contains("unsafeWasmCharArrayToRawMemory"));
+    }
+
+    #[test]
+    fn utf8_remains_the_default_string_encoding() {
+        let files = generate_files(None, STRINGS, Opts::default()).unwrap();
+
+        let internal = &files["InternalRunner.kt"];
+        assert!(internal.contains("encodeToByteArray"));
+        let support = &files["runtime/ComponentSupport.kt"];
+        assert!(!support.contains("unsafeRawMemoryToWasmCharArray"));
+    }
+
+    #[test]
+    fn compact_utf16_is_rejected() {
+        let error = generate_files(
+            None,
+            STRINGS,
+            Opts {
+                string_encoding: StringEncoding::CompactUTF16,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "compact UTF-16 is not supported by the Kotlin backend"
         );
     }
 
