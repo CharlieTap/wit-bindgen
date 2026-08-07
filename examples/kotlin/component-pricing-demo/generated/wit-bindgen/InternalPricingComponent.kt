@@ -17,8 +17,8 @@ fun __wasm_export_quote(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int, p3: kotl
   bindings.runtime.STRING_FROM_MEM(p0, p1),
   p2,
   p3,
-  pricing.CustomerTier.values()[p4],
-  pricing.TaxRegion.values()[p5],
+  pricing.CustomerTier.entries[p4],
+  pricing.TaxRegion.entries[p5],
   bindings.runtime.STRING_FROM_MEM(p6, p7),
   ))
 

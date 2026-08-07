@@ -2926,7 +2926,7 @@ impl Bindgen for FunctionBindgen<'_, '_> {
             Instruction::EnumLift { ty, .. } => {
                 let op0 = &operands[0];
                 let enum_class_name = self.r#gen.type_name(&Type::Id(*ty)).clone();
-                results.push(format!("{enum_class_name}.values()[{op0}]"));
+                results.push(format!("{enum_class_name}.entries[{op0}]"));
             }
 
             Instruction::ListCanonLower { .. } | Instruction::ListCanonLift { .. } => {
@@ -3521,6 +3521,31 @@ mod tests {
         assert!(internal.contains("encodeToByteArray"));
         let support = &files["runtime/ComponentSupport.kt"];
         assert!(!support.contains("unsafeRawMemoryToWasmCharArray"));
+    }
+
+    #[test]
+    fn enum_lifts_use_cached_entries() {
+        let files = generate_files(
+            None,
+            r#"
+                package example:enums;
+
+                interface api {
+                    enum status { ready, running, complete }
+                    set-status: func(status: status);
+                }
+
+                world runner {
+                    export api;
+                }
+            "#,
+            Opts::default(),
+        )
+        .unwrap();
+
+        let internal = &files["InternalRunner.kt"];
+        assert!(internal.contains("Status.entries[p0]"));
+        assert!(!internal.contains("Status.values()"));
     }
 
     #[test]
