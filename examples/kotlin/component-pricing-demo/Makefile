@@ -29,8 +29,13 @@ generate: bindgen
 		--kotlin-package-name bindings \
 		--string-encoding utf16 \
 		--primitive-lists arrays \
-		--with 'example:pricing/pricing-types@1.0.0=pricing' \
-		--with 'example:pricing/pricing-types@1.0.0/price-quote=pricing.Quote' \
+		--with 'example:pricing/pricing@1.0.0/customer-tier=pricing.CustomerTier' \
+		--with 'example:pricing/pricing@1.0.0/tax-region=pricing.TaxRegion' \
+		--with 'example:pricing/pricing@1.0.0/quote-request=pricing.QuoteRequest' \
+		--with 'example:pricing/pricing@1.0.0/line-item=pricing.LineItem' \
+		--with 'example:pricing/pricing@1.0.0/pricing-model-data=pricing.PricingModelData' \
+		--with 'example:pricing/pricing@1.0.0/price-quote=pricing.Quote' \
+		--export 'example:pricing/pricing@1.0.0=pricing.PricingComponent.service' \
 		--out-dir $(GENERATED) \
 		wit
 

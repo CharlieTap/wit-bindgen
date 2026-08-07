@@ -13,7 +13,7 @@ import bindings.runtime.*
 fun __wasm_export_quote(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int, p3: kotlin.Long, p4: kotlin.Int, p5: kotlin.Int, p6: kotlin.Int, p7: kotlin.Int): kotlin.Int {
   kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
   kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-  val result: pricing.Quote = PricingImpl.quote(pricing.QuoteRequest(
+  val result: pricing.Quote = pricing.PricingComponent.service.quote(pricing.QuoteRequest(
   bindings.runtime.STRING_FROM_MEM(p0, p1),
   p2,
   p3,

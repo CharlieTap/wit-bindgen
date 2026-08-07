@@ -209,6 +209,7 @@ struct Kotlin {
     tuple_counts: HashSet<usize>,
     interface_kotlin_names: HashMap<InterfaceId, String>,
     import_interface_names: HashMap<InterfaceId, InterfaceName>,
+    export_interface_receivers: HashMap<InterfaceId, String>,
     exported_interfaces: HashSet<InterfaceId>,
     exported_resources: HashSet<TypeId>,
     generated_types: HashSet<String>,
@@ -230,6 +231,14 @@ fn parse_with(s: &str) -> Result<(String, WithOption), String> {
         other => WithOption::Path(other.to_string()),
     };
     Ok((k.to_string(), v))
+}
+
+#[cfg(feature = "clap")]
+fn parse_export(s: &str) -> Result<(String, String), String> {
+    let (wit_export, kotlin_receiver) = s.split_once('=').ok_or_else(|| {
+        format!("expected string of form `<wit-export>=<kotlin-receiver>`; got `{s}`")
+    })?;
+    Ok((wit_export.to_string(), kotlin_receiver.to_string()))
 }
 
 #[derive(clap::ValueEnum, Debug, Clone)]
@@ -345,6 +354,22 @@ pub struct Opts {
     /// `k1=v1,k2=v2`.
     #[cfg_attr(feature = "clap", arg(long, value_parser = parse_with, value_delimiter = ','))]
     pub with: Vec<(String, WithOption)>,
+
+    /// Map a WIT exported interface to the Kotlin receiver that implements it.
+    ///
+    /// Argument must be of the form `k=v`. This option can be passed multiple
+    /// times or one option can be comma separated, for example
+    /// `k1=v1,k2=v2`.
+    #[cfg_attr(
+        feature = "clap",
+        arg(
+            long = "export",
+            value_name = "WIT-EXPORT=KOTLIN-RECEIVER",
+            value_parser = parse_export,
+            value_delimiter = ','
+        )
+    )]
+    pub exports: Vec<(String, String)>,
 
     /// Indicates that all interfaces not specified in `with` should be
     /// generated.
@@ -489,7 +514,22 @@ impl WorldGenerator for Kotlin {
         let referenced_interface =
             ReferencedInterface::create_unified_referenced_interface_name(resolve, name, id);
 
-        self.generated_types.insert(resolve.name_world_key(name));
+        let with_name = resolve.name_world_key(name);
+        let mut export_receivers = self
+            .opts
+            .exports
+            .iter()
+            .filter(|(key, _)| key == &with_name)
+            .map(|(_, target)| target);
+        if let Some(receiver) = export_receivers.next() {
+            if export_receivers.next().is_some() {
+                bail!("duplicate export mapping for `{with_name}`");
+            }
+            self.export_interface_receivers
+                .insert(referenced_interface.id, receiver.clone());
+        }
+
+        self.generated_types.insert(with_name);
 
         self.interface_kotlin_names.insert(
             referenced_interface.id,
@@ -676,7 +716,7 @@ impl WorldGenerator for Kotlin {
         let mut generation_plan = mem::take(&mut self.generation_plan);
 
         for (referenced_interface, outside_kind) in generation_plan.interfaces {
-            self.import_export_interface(resolve, referenced_interface, outside_kind);
+            self.import_export_interface(resolve, referenced_interface, outside_kind)?;
         }
 
         if generation_plan.in_place_funcs.len() > 0 {
@@ -848,14 +888,16 @@ impl WorldGenerator for Kotlin {
             }
         }
 
-        // just push to the string itself, because we don't want re-indenting of what's in src
-        kt_str.as_mut_string().push_str(&self.src);
+        if !self.src.is_empty() || self.opts.exports.is_empty() {
+            // just push to the string itself, because we don't want re-indenting of what's in src
+            kt_str.as_mut_string().push_str(&self.src);
 
-        // TODO(Kotlin): Add custom section
-        files.push(
-            &format!("{}.kt", world.name.to_upper_camel_case()),
-            kt_str.as_bytes(),
-        );
+            // TODO(Kotlin): Add custom section
+            files.push(
+                &format!("{}.kt", world.name.to_upper_camel_case()),
+                kt_str.as_bytes(),
+            );
+        }
 
         let mut private_kt_str = Source::default();
         wit_bindgen_core::generated_preamble(&mut private_kt_str, version);
@@ -1045,7 +1087,9 @@ impl WorldGenerator for Kotlin {
         };
         write_component_support_kt();
 
-        if self.opts.generate_stubs {
+        if self.opts.generate_stubs
+            && (!self.export_stubs_src.is_empty() || self.opts.exports.is_empty())
+        {
             let mut stubs_kt = Source::default();
             wit_bindgen_core::generated_preamble(&mut stubs_kt, version);
             // TODO consider different package & outdir for export stubs
@@ -1072,6 +1116,27 @@ impl WorldGenerator for Kotlin {
         unused_keys.sort();
         if !unused_keys.is_empty() {
             bail!("unused remappings provided via `with`: {unused_keys:?}");
+        }
+
+        let world_exports = world
+            .exports
+            .iter()
+            .filter(|(_, item)| matches!(item, WorldItem::Interface { .. }))
+            .map(|(key, _)| resolve.name_world_key(key))
+            .collect::<HashSet<_>>();
+        let configured_exports = self
+            .opts
+            .exports
+            .iter()
+            .map(|(key, _)| key)
+            .cloned()
+            .collect::<HashSet<_>>();
+        let mut unused_exports = configured_exports
+            .difference(&world_exports)
+            .collect::<Vec<_>>();
+        unused_exports.sort();
+        if !unused_exports.is_empty() {
+            bail!("unused export mappings: {unused_exports:?}");
         }
 
         Ok(())
@@ -1169,6 +1234,7 @@ impl Kotlin {
             referenced_interface,
             outside_kind,
             remap_import_types: outside_kind == OutsideKind::Imported,
+            export_receiver: None,
         }
     }
 
@@ -1177,7 +1243,7 @@ impl Kotlin {
         resolve: &Resolve,
         referenced_interface: ReferencedNonAnonymousInterface,
         outside_kind: OutsideKind,
-    ) {
+    ) -> Result<()> {
         let kotlin_name = referenced_interface.name_info.kotlin_name.clone();
         let kotlin_package = self.opts.kotlin_package_name.clone();
         let referenced_interface_id = referenced_interface.id;
@@ -1187,14 +1253,46 @@ impl Kotlin {
                 .import_interface_names
                 .get(&referenced_interface_id)
                 .is_some_and(|name| name.remapped);
+        let export_receiver = self
+            .export_interface_receivers
+            .get(&referenced_interface_id)
+            .cloned();
+        let generate_interface = (outside_kind.is_imported() && !whole_import_remapped)
+            || (outside_kind.is_exported() && export_receiver.is_none());
         for ty in resolve.interfaces[referenced_interface_id].types.values() {
             if let Some(full_name) = full_wit_type_name(resolve, *ty) {
                 self.generated_types.insert(full_name);
             }
         }
 
-        if outside_kind == OutsideKind::Imported && whole_import_remapped {
-            return;
+        if !outside_kind.is_exported() && whole_import_remapped {
+            return Ok(());
+        }
+
+        if outside_kind.is_exported() && export_receiver.is_some() && !generate_interface {
+            let mut missing_types = resolve.interfaces[referenced_interface_id]
+                .types
+                .values()
+                .filter(|ty| {
+                    matches!(
+                        resolve.types[**ty].kind,
+                        TypeDefKind::Record(_)
+                            | TypeDefKind::Resource
+                            | TypeDefKind::Flags(_)
+                            | TypeDefKind::Enum(_)
+                            | TypeDefKind::Variant(_)
+                    )
+                })
+                .filter_map(|ty| full_wit_type_name(resolve, *ty))
+                .filter(|name| !matches!(self.with.get(name), Some(TypeGeneration::Remap(_))))
+                .collect::<Vec<_>>();
+            missing_types.sort();
+            if !missing_types.is_empty() {
+                bail!(
+                    "export mapping for `{}` requires `with` mappings for its Kotlin types: {missing_types:?}",
+                    referenced_interface.name_info.fq_wit_name
+                );
+            }
         }
 
         let mut r#gen = self.interface(
@@ -1202,6 +1300,7 @@ impl Kotlin {
             outside_kind,
             ReferencedMaybeAnonymousInterface::from(referenced_interface),
         );
+        r#gen.export_receiver = export_receiver;
 
         // First define the types, because they need to exist so that the internal wit-bindgen state is correct (e.g. to track the outside_kind of a resource)
 
@@ -1213,14 +1312,15 @@ impl Kotlin {
         r#gen.src.push_str("// START OF TYPES\n\n");
         for (name, ty) in &resolve.interfaces[referenced_interface_id].types {
             let full_name = full_wit_type_name(resolve, *ty);
-            let generate = outside_kind.is_exported()
-                || full_name.as_ref().is_none_or(|full_name| {
-                    r#gen
-                        .r#gen
-                        .with
-                        .get(full_name)
-                        .is_none_or(TypeGeneration::generated)
-                });
+            let generate = generate_interface
+                && (outside_kind.is_exported() && r#gen.export_receiver.is_none()
+                    || full_name.as_ref().is_none_or(|full_name| {
+                        r#gen
+                            .r#gen
+                            .with
+                            .get(full_name)
+                            .is_none_or(TypeGeneration::generated)
+                    }));
             if generate {
                 r#gen.define_type(name, *ty);
             }
@@ -1265,39 +1365,51 @@ impl Kotlin {
 
         r#gen.src.append_src(&tmp_types_src);
 
-        r#gen.remap_import_types = outside_kind == OutsideKind::Imported;
-        for (_name, func) in resolve.interfaces[referenced_interface_id].functions.iter() {
-            if func.kind == FunctionKind::Freestanding {
-                let kotlin_sig = r#gen.kotlin_signature(func, true, false);
-                r#gen.src.push_str(&kotlin_sig);
-                r#gen.src.push_str("\n");
+        if generate_interface {
+            r#gen.remap_import_types = outside_kind == OutsideKind::Imported;
+            for (_name, func) in resolve.interfaces[referenced_interface_id].functions.iter() {
+                if func.kind == FunctionKind::Freestanding {
+                    let kotlin_sig = r#gen.kotlin_signature(func, true, false);
+                    r#gen.src.push_str(&kotlin_sig);
+                    r#gen.src.push_str("\n");
+                }
             }
         }
 
         // remove the extra level of indentation
         r#gen.src.deindent(1);
 
-        let object_body = &r#gen.src.as_mut_string();
-        let private_top_level_body = &r#gen.private_top_level_src.as_mut_string();
-        let exports_stubs_body = &r#gen.export_stubs_src.as_mut_string();
+        let InterfaceGenerator {
+            src: object_body,
+            private_top_level_src: private_top_level_body,
+            export_stubs_src: exports_stubs_body,
+            export_receiver,
+            referenced_interface,
+            ..
+        } = r#gen;
+        let object_body = String::from(object_body);
+        let private_top_level_body = String::from(private_top_level_body);
+        let exports_stubs_body = String::from(exports_stubs_body);
+        let has_export_receiver = export_receiver.is_some();
+        let wit_iface_name = referenced_interface.name_info.fq_wit_name;
 
-        let wit_iface_name = r#gen.referenced_interface.name_info.fq_wit_name.as_str();
+        if generate_interface {
+            // TODO(Kotlin): Naming of exports
+            // write to the raw string to avoid reindenting
+            uwriteln!(
+                self.src.as_mut_string(),
+                "@WitInterface(\"{wit_iface_name}\")"
+            );
 
-        // TODO(Kotlin): Naming of exports
-        // write to the raw string to avoid reindenting
-        uwriteln!(
-            self.src.as_mut_string(),
-            "@WitInterface(\"{wit_iface_name}\")"
-        );
+            self.opts
+                .maybe_push_declaration_visibility_src(&mut self.src);
+            uwriteln!(
+                self.src.as_mut_string(),
+                "/*external */interface {kotlin_name} {{\n{object_body}\n}}\n"
+            );
+        }
 
-        self.opts
-            .maybe_push_declaration_visibility_src(&mut self.src);
-        uwriteln!(
-            self.src.as_mut_string(),
-            "/*external */interface {kotlin_name} {{\n{object_body}\n}}\n"
-        );
-
-        if outside_kind.is_exported() {
+        if outside_kind.is_exported() && !has_export_receiver {
             self.opts
                 .maybe_push_declaration_visibility_src(&mut self.export_stubs_src);
             uwriteln!(
@@ -1323,6 +1435,7 @@ impl Kotlin {
         // }
 
         uwriteln!(self.private_src, "{private_top_level_body}\n");
+        Ok(())
     }
 
     // TODO Ideally, this most likely shouldn't exist (it's essentially another unimplemented! checker), as generally, anything that passes the wit syntax checker should generate correctly.
@@ -1355,6 +1468,7 @@ struct InterfaceGenerator<'a> {
     resolve: &'a Resolve,
     referenced_interface: ReferencedMaybeAnonymousInterface,
     remap_import_types: bool,
+    export_receiver: Option<String>,
 }
 
 impl<'a> wit_bindgen_core::InterfaceGenerator<'a> for InterfaceGenerator<'a> {
@@ -2164,7 +2278,7 @@ impl InterfaceGenerator<'_> {
 
         let fq_wit_name = self.referenced_interface.name_info.fq_wit_name.as_str();
         let export_name = Self::mangle_wit_symbol_export_name(func, fq_wit_name);
-        {
+        if self.export_receiver.is_none() {
             let kotlin_sig = self.kotlin_signature(func, false, false);
             if !matches!(func.kind, FunctionKind::Constructor(_)) {
                 // Constructor in exported abstract resource class is not needed
@@ -3223,17 +3337,19 @@ impl Bindgen for FunctionBindgen<'_, '_> {
                        */
                 };
 
-                let called_interface_kotlin_name = format!(
-                    "{}Impl",
-                    &self.r#gen.referenced_interface.name_info.kotlin_name
-                );
+                let export_receiver = self.r#gen.export_receiver.clone().unwrap_or_else(|| {
+                    format!(
+                        "{}Impl",
+                        self.r#gen.referenced_interface.name_info.kotlin_name
+                    )
+                });
                 let name = self.r#gen.kotlin_fun_name(func);
 
                 uwrite!(self.src, "{assignment}");
                 match func.kind {
                     FunctionKind::Freestanding => {
                         let args = operands.join(", ");
-                        uwriteln!(self.src, "{called_interface_kotlin_name}.{name}({args})");
+                        uwriteln!(self.src, "{export_receiver}.{name}({args})");
                     }
                     FunctionKind::Method(_) => {
                         let receiver_arg = operands[0].clone();
@@ -3607,6 +3723,22 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "clap")]
+    #[test]
+    fn parses_export_mapping() {
+        assert_eq!(
+            parse_export("example:app/api=example.Component.api").unwrap(),
+            (
+                "example:app/api".to_string(),
+                "example.Component.api".to_string()
+            )
+        );
+        assert_eq!(
+            parse_export("example:app/api").unwrap_err(),
+            "expected string of form `<wit-export>=<kotlin-receiver>`; got `example:app/api`"
+        );
+    }
+
     #[test]
     fn utf16_strings_use_kotlin_code_units_directly() {
         let files = generate_files(
@@ -3947,6 +4079,44 @@ mod tests {
     }
 
     #[test]
+    fn binds_an_exported_interface_to_a_kotlin_receiver() {
+        let files = generate_files(
+            None,
+            r#"
+                package example:app;
+
+                interface api {
+                    record payload { value: u32 }
+                    call: func(value: payload) -> payload;
+                }
+
+                world runner {
+                    export api;
+                }
+            "#,
+            Opts {
+                with: vec![(
+                    "example:app/api/payload".into(),
+                    WithOption::Path("example.Payload".into()),
+                )],
+                exports: vec![("example:app/api".into(), "example.Component.api".into())],
+                generate_stubs: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!files.contains_key("Runner.kt"));
+
+        let internal = &files["InternalRunner.kt"];
+        assert!(internal.contains("example.Payload("));
+        assert!(internal.contains("p0.toUInt(),"));
+        assert!(internal.contains("example.Component.api.call("));
+        assert!(!internal.contains("ApiImpl.call("));
+        assert!(!files.contains_key("RunnerImpl.kt"));
+    }
+
+    #[test]
     fn export_uses_types_from_a_remapped_import() {
         let source = generate(
             None,
@@ -4041,6 +4211,26 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "unused remappings provided via `with`: [\"unused:key\"]"
+        );
+    }
+
+    #[test]
+    fn rejects_unused_export_mappings() {
+        let error = generate_files(
+            None,
+            r#"
+                package example:app;
+                world runner {}
+            "#,
+            Opts {
+                exports: vec![("example:app/api".into(), "example.Component.api".into())],
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "unused export mappings: [\"example:app/api\"]"
         );
     }
 }

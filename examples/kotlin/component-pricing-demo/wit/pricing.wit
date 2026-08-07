@@ -1,6 +1,6 @@
 package example:pricing@1.0.0;
 
-interface pricing-types {
+interface pricing {
     enum customer-tier {
         standard,
         preferred,
@@ -55,15 +55,9 @@ interface pricing-types {
         model-data: pricing-model-data,
     }
 
-}
-
-interface pricing {
-    use pricing-types.{quote-request, price-quote};
-
     quote: func(request: quote-request) -> price-quote;
 }
 
 world pricing-component {
-    import pricing-types;
     export pricing;
 }
