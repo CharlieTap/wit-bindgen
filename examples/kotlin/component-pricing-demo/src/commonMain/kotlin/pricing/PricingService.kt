@@ -2,6 +2,8 @@
 
 package pricing
 
+import dev.zacsweers.metro.Inject
+
 interface PricingService {
     fun quote(request: QuoteRequest): Quote
 }
@@ -60,34 +62,65 @@ data class Quote(
     val modelData: PricingModelData,
 )
 
-class StandardPricingService : PricingService {
-    override fun quote(request: QuoteRequest): Quote {
-        val quantity = request.quantity.coerceAtLeast(0)
-        val unitPriceMinor = request.unitPriceMinor.coerceAtLeast(0)
-        val subtotalMinor = unitPriceMinor * quantity
+interface DiscountPolicy {
+    fun basisPoints(quantity: Int, customerTier: CustomerTier): Int
+}
 
+@Inject
+class StandardDiscountPolicy : DiscountPolicy {
+    override fun basisPoints(quantity: Int, customerTier: CustomerTier): Int {
         val volumeDiscountBasisPoints = when {
             quantity >= 100 -> 500
             quantity >= 25 -> 250
             quantity >= 10 -> 100
             else -> 0
         }
-        val tierDiscountBasisPoints = when (request.customerTier) {
+        val tierDiscountBasisPoints = when (customerTier) {
             CustomerTier.STANDARD -> 0
             CustomerTier.PREFERRED -> 200
             CustomerTier.ENTERPRISE -> 500
         }
-        val discountBasisPoints =
-            (volumeDiscountBasisPoints + tierDiscountBasisPoints).coerceAtMost(2_500)
+        return (volumeDiscountBasisPoints + tierDiscountBasisPoints).coerceAtMost(2_500)
+    }
+}
+
+interface TaxPolicy {
+    fun basisPoints(region: TaxRegion): Int
+}
+
+@Inject
+class StandardTaxPolicy : TaxPolicy {
+    override fun basisPoints(region: TaxRegion): Int = when (region) {
+        TaxRegion.EXEMPT -> 0
+        TaxRegion.UK -> 2_000
+        TaxRegion.EU -> 2_100
+        TaxRegion.US -> 825
+    }
+}
+
+@Inject
+class StandardPricingService(
+    private val discountPolicy: DiscountPolicy,
+    taxPolicy: TaxPolicy,
+) : PricingService {
+    private val taxBasisPointsByRegion: IntArray
+
+    init {
+        taxBasisPointsByRegion = IntArray(TaxRegion.entries.size) { region ->
+            taxPolicy.basisPoints(TaxRegion.entries[region])
+        }
+    }
+
+    override fun quote(request: QuoteRequest): Quote {
+        val quantity = request.quantity.coerceAtLeast(0)
+        val unitPriceMinor = request.unitPriceMinor.coerceAtLeast(0)
+        val subtotalMinor = unitPriceMinor * quantity
+
+        val discountBasisPoints = discountPolicy.basisPoints(quantity, request.customerTier)
         val discountMinor = subtotalMinor * discountBasisPoints / 10_000
         val discountedSubtotalMinor = subtotalMinor - discountMinor
 
-        val taxBasisPoints = when (request.taxRegion) {
-            TaxRegion.EXEMPT -> 0
-            TaxRegion.UK -> 2_000
-            TaxRegion.EU -> 2_100
-            TaxRegion.US -> 825
-        }
+        val taxBasisPoints = taxBasisPointsByRegion[request.taxRegion.ordinal]
         val taxMinor = discountedSubtotalMinor * taxBasisPoints / 10_000
         val totalMinor = discountedSubtotalMinor + taxMinor
 

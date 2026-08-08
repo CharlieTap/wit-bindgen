@@ -8,8 +8,41 @@ import kotlin.test.assertEquals
 
 class StandardPricingServiceTest {
     @Test
+    fun initializesTaxRatesWhenServiceIsConstructed() {
+        var taxPolicyCalls = 0
+        val service = StandardPricingService(
+            discountPolicy = StandardDiscountPolicy(),
+            taxPolicy = object : TaxPolicy {
+                override fun basisPoints(region: TaxRegion): Int {
+                    taxPolicyCalls += 1
+                    return if (region == TaxRegion.UK) 1_000 else 0
+                }
+            },
+        )
+
+        assertEquals(TaxRegion.entries.size, taxPolicyCalls)
+
+        val quote = service.quote(
+            QuoteRequest(
+                sku = "INITIALIZED",
+                quantity = 1,
+                unitPriceMinor = 1_000,
+                customerTier = CustomerTier.STANDARD,
+                taxRegion = TaxRegion.UK,
+                currency = "GBP",
+            ),
+        )
+
+        assertEquals(100, quote.taxMinor)
+        assertEquals(TaxRegion.entries.size, taxPolicyCalls)
+    }
+
+    @Test
     fun calculatesVolumeTierDiscountAndTax() {
-        val quote = StandardPricingService().quote(
+        val quote = StandardPricingService(
+            discountPolicy = StandardDiscountPolicy(),
+            taxPolicy = StandardTaxPolicy(),
+        ).quote(
             QuoteRequest(
                 sku = "APEX-PRO",
                 quantity = 30,

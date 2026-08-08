@@ -4,6 +4,7 @@ import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 
 plugins {
     kotlin("multiplatform") version "2.4.0"
+    id("dev.zacsweers.metro") version "1.3.2"
 }
 
 repositories {
