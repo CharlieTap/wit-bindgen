@@ -1,7 +1,7 @@
 # Kotlin component pricing playground
 
 This project compiles an ordinary Kotlin `PricingService` implementation to a
-WebAssembly component with Kotlin 2.4. The Kotlin interface, records, enums, and
+WebAssembly component with Kotlin 2.5.0-Beta1. The Kotlin interface, records, enums, and
 implementation remain the application-owned source of truth. The WIT contract
 is handwritten to keep the example focused on generated component bindings.
 

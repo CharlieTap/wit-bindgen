@@ -35,10 +35,6 @@ abstract class WitResource: AutoCloseable{
 }
 
 
-@WasmExport
-fun cabi_realloc(ptr: Int, oldSize: Int, align: Int, newSize: Int): Int =
-componentModelRealloc(ptr, oldSize, newSize)
-
 
 fun MemoryAllocator.STRING_TO_MEM(s: String): Int =
 writeToLinearMemory(s).address.toInt()

@@ -3,8 +3,8 @@
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 
 plugins {
-    kotlin("multiplatform") version "2.4.0"
-    id("dev.zacsweers.metro") version "1.3.2"
+    kotlin("multiplatform") version "2.5.0-Beta1"
+    id("dev.zacsweers.metro") version "1.4.5"
 }
 
 repositories {

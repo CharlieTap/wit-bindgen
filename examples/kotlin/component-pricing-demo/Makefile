@@ -27,6 +27,7 @@ generate: bindgen
 	mkdir -p $(GENERATED)
 	$(WIT_BINDGEN) kotlin \
 		--kotlin-package-name bindings \
+		--generate-cabi-realloc-export false \
 		--string-encoding utf16 \
 		--primitive-lists arrays \
 		--with 'example:pricing/pricing@1.0.0/customer-tier=pricing.CustomerTier' \
